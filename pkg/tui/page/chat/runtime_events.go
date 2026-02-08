@@ -56,6 +56,13 @@ func (p *chatPage) handleRuntimeEvent(msg tea.Msg) (bool, tea.Cmd) {
 	case *runtime.WarningEvent:
 		return true, notification.WarningCmd(msg.Message)
 
+	case *runtime.ModelFallbackEvent:
+		// Update sidebar with the fallback model immediately so it reflects the switch
+		p.sidebar.SetAgentInfo(msg.AgentName, msg.FallbackModel, "")
+		// Notify user when switching to a fallback model, include the reason
+		fallbackMsg := fmt.Sprintf("Model %s failed (%s), switching to %s", msg.FailedModel, msg.Reason, msg.FallbackModel)
+		return true, notification.WarningCmd(fallbackMsg)
+
 	// ===== Stream Lifecycle Events =====
 	case *runtime.StreamStartedEvent:
 		return true, p.handleStreamStarted(msg)
@@ -65,7 +72,7 @@ func (p *chatPage) handleRuntimeEvent(msg tea.Msg) (bool, tea.Cmd) {
 
 	// ===== Content Events =====
 	case *runtime.UserMessageEvent:
-		return true, p.messages.ReplaceLoadingWithUser(msg.Message)
+		return true, p.messages.ReplaceLoadingWithUser(msg.Message, msg.SessionPosition)
 
 	case *runtime.AgentChoiceEvent:
 		return true, p.handleAgentChoice(msg)
@@ -109,6 +116,7 @@ func (p *chatPage) handleRuntimeEvent(msg tea.Msg) (bool, tea.Cmd) {
 
 	case *runtime.ToolsetInfoEvent:
 		p.sidebar.SetToolsetInfo(msg.AvailableTools, msg.Loading)
+		p.sidebar.SetSkillsInfo(len(p.app.CurrentAgentSkills()))
 		return true, nil
 
 	case *runtime.SessionTitleEvent:

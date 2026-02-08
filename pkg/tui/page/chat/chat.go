@@ -16,6 +16,7 @@ import (
 	"charm.land/lipgloss/v2"
 
 	"github.com/docker/cagent/pkg/app"
+	"github.com/docker/cagent/pkg/chat"
 	"github.com/docker/cagent/pkg/history"
 	"github.com/docker/cagent/pkg/tui/commands"
 	"github.com/docker/cagent/pkg/tui/components/editor"
@@ -100,6 +101,12 @@ type EditorHeightChangedMsg struct {
 	Height int
 }
 
+// SidebarSettings holds the sidebar display settings that should persist across session changes.
+type SidebarSettings struct {
+	Collapsed      bool
+	PreferredWidth int
+}
+
 // Page represents the main chat page
 type Page interface {
 	layout.Model
@@ -119,6 +126,10 @@ type Page interface {
 	SetRecording(recording bool) tea.Cmd
 	// SendEditorContent sends the current editor content as a message
 	SendEditorContent() tea.Cmd
+	// GetSidebarSettings returns the current sidebar display settings
+	GetSidebarSettings() SidebarSettings
+	// SetSidebarSettings applies sidebar display settings
+	SetSidebarSettings(settings SidebarSettings)
 }
 
 // queuedMessage represents a message waiting to be sent to the agent
@@ -163,6 +174,11 @@ type chatPage struct {
 
 	// Message queue for enqueuing messages while agent is working
 	messageQueue []queuedMessage
+
+	// Editing state for branching sessions
+	editing          bool
+	branchAtPosition int
+	editAttachments  map[string]string // Preserved attachments from original message
 
 	// Key map
 	keyMap KeyMap
@@ -386,10 +402,12 @@ func (p *chatPage) Init() tea.Cmd {
 		p.editor.Focus(),
 	)
 
-	// Load messages from existing session (for session restore)
-	if sess := p.app.Session(); sess != nil && len(sess.Messages) > 0 {
-		cmds = append(cmds, p.messages.LoadFromSession(sess))
+	// Load state from existing session (for session restore and branching)
+	if sess := p.app.Session(); sess != nil {
 		p.sidebar.LoadFromSession(sess)
+		if len(sess.Messages) > 0 {
+			cmds = append(cmds, p.messages.LoadFromSession(sess))
+		}
 	}
 
 	return tea.Batch(cmds...)
@@ -465,6 +483,15 @@ func (p *chatPage) Update(msg tea.Msg) (layout.Model, tea.Cmd) {
 		}
 
 		return p, tea.Batch(cmds...)
+
+	case msgtypes.EditUserMessageMsg:
+		return p.handleEditUserMessage(msg)
+
+	case messages.InlineEditCommittedMsg:
+		return p.handleInlineEditCommitted(msg)
+
+	case messages.InlineEditCancelledMsg:
+		return p.handleInlineEditCancelled(msg)
 
 	case msgtypes.SendMsg:
 		slog.Debug(msg.Content)
@@ -775,6 +802,11 @@ func (p *chatPage) GetInputHeight() int {
 
 // Bindings returns key bindings for the chat page
 func (p *chatPage) Bindings() []key.Binding {
+	// When inline editing, show only the inline edit bindings (no Tab switch)
+	if p.messages.IsInlineEditing() {
+		return p.messages.Bindings()
+	}
+
 	bindings := []key.Binding{
 		p.keyMap.Tab,
 	}
@@ -882,6 +914,136 @@ func (p *chatPage) handleSendMsg(msg msgtypes.SendMsg) (layout.Model, tea.Cmd) {
 	return p, notification.InfoCmd(notifyMsg)
 }
 
+func (p *chatPage) handleEditUserMessage(msg msgtypes.EditUserMessageMsg) (layout.Model, tea.Cmd) {
+	if msg.SessionPosition < 0 || msg.MsgIndex < 0 {
+		return p, nil
+	}
+
+	p.editing = true
+	p.branchAtPosition = msg.SessionPosition
+
+	// Extract any attachments from the original session message
+	p.editAttachments = p.extractAttachmentsFromSession(msg.SessionPosition)
+
+	// Start inline editing in the messages component
+	// Use the MsgIndex directly - it was already computed correctly at click time
+	// Note: We don't call Focus() here because it would select/scroll to the last
+	// assistant message. StartInlineEdit handles focus for the inline textarea.
+	p.focusedPanel = PanelChat
+	p.editor.Blur()
+	cmd := p.messages.StartInlineEdit(msg.MsgIndex, msg.SessionPosition, msg.OriginalContent)
+
+	return p, cmd
+}
+
+// handleInlineEditCommitted handles the commit of an inline edit, triggering a branch.
+func (p *chatPage) handleInlineEditCommitted(msg messages.InlineEditCommittedMsg) (layout.Model, tea.Cmd) {
+	if !p.editing {
+		return p, nil
+	}
+
+	p.editing = false
+	branchPosition := p.branchAtPosition
+	p.branchAtPosition = 0
+	attachments := p.editAttachments
+	p.editAttachments = nil
+
+	var cancelCmd tea.Cmd
+	if p.msgCancel != nil {
+		cancelCmd = p.cancelStream(false)
+	}
+
+	p.messageQueue = nil
+	p.syncQueueToSidebar()
+
+	parentID := ""
+	if sess := p.app.Session(); sess != nil {
+		parentID = sess.ID
+	}
+
+	branchCmd := core.CmdHandler(msgtypes.BranchFromEditMsg{
+		ParentSessionID:  parentID,
+		BranchAtPosition: branchPosition,
+		Content:          msg.Content,
+		Attachments:      attachments,
+	})
+
+	return p, tea.Batch(cancelCmd, branchCmd)
+}
+
+// handleInlineEditCancelled handles cancellation of an inline edit.
+func (p *chatPage) handleInlineEditCancelled(msg messages.InlineEditCancelledMsg) (layout.Model, tea.Cmd) {
+	p.editing = false
+	p.branchAtPosition = 0
+	p.editAttachments = nil
+
+	if msg.WasInSelectionMode {
+		// We were in keyboard selection mode before editing, stay in the messages panel
+		p.focusedPanel = PanelChat
+		p.editor.Blur()
+		// The messages component already restored its selection state
+	} else {
+		// We weren't in selection mode, return focus to the editor
+		p.focusedPanel = PanelEditor
+		p.messages.Blur()
+		p.editor.Focus()
+	}
+
+	return p, nil
+}
+
+// extractAttachmentsFromSession extracts attachments from a session message at the given position.
+// Attachments are stored as text parts in MultiContent with format "Contents of <filename>: <dataURL>".
+// TODO(krisetto): meh we can store and retrieve attachments better in the session itself
+func (p *chatPage) extractAttachmentsFromSession(position int) map[string]string {
+	sess := p.app.Session()
+	if sess == nil || position < 0 || position >= len(sess.Messages) {
+		return nil
+	}
+
+	item := sess.Messages[position]
+	if !item.IsMessage() || item.Message == nil {
+		return nil
+	}
+
+	msg := item.Message.Message
+	if len(msg.MultiContent) <= 1 {
+		// No attachments - only the main text content or nothing
+		return nil
+	}
+
+	attachments := make(map[string]string)
+	const prefix = "Contents of "
+
+	// Skip the first part (main text content), look for attachment parts
+	for i := 1; i < len(msg.MultiContent); i++ {
+		part := msg.MultiContent[i]
+		if part.Type != chat.MessagePartTypeText {
+			continue
+		}
+		text := part.Text
+		if !strings.HasPrefix(text, prefix) {
+			continue
+		}
+		// Parse "Contents of <filename>: <dataURL>"
+		rest := text[len(prefix):]
+		colonIdx := strings.Index(rest, ": ")
+		if colonIdx == -1 {
+			continue
+		}
+		filename := rest[:colonIdx]
+		dataURL := rest[colonIdx+2:]
+		if filename != "" && dataURL != "" {
+			attachments[filename] = dataURL
+		}
+	}
+
+	if len(attachments) == 0 {
+		return nil
+	}
+	return attachments
+}
+
 // processNextQueuedMessage pops the next message from the queue and processes it.
 // Returns nil if the queue is empty.
 func (p *chatPage) processNextQueuedMessage() tea.Cmd {
@@ -976,13 +1138,9 @@ func (p *chatPage) processMessage(msg msgtypes.SendMsg) tea.Cmd {
 	}
 
 	// Run command resolution and agent execution in a goroutine
-	// so the UI can update with the spinner before any blocking operations.
+	// so the UI stays responsive while skill/agent commands are resolved.
 	go func() {
-		// Resolve agent commands (e.g., /fix-lint -> prompt text)
-		// This can execute tools and take time, but the spinner is already showing.
-		resolvedContent := p.app.ResolveCommand(ctx, msg.Content)
-
-		p.app.Run(ctx, p.msgCancel, resolvedContent, msg.Attachments)
+		p.app.Run(ctx, p.msgCancel, p.app.ResolveInput(ctx, msg.Content), msg.Attachments)
 	}()
 
 	return tea.Batch(p.messages.ScrollToBottom(), spinnerCmd, loadingCmd)
@@ -1010,6 +1168,20 @@ func (p *chatPage) SetSessionStarred(starred bool) {
 
 func (p *chatPage) SetTitleRegenerating(regenerating bool) tea.Cmd {
 	return p.sidebar.SetTitleRegenerating(regenerating)
+}
+
+// GetSidebarSettings returns the current sidebar display settings.
+func (p *chatPage) GetSidebarSettings() SidebarSettings {
+	return SidebarSettings{
+		Collapsed:      p.sidebar.IsCollapsed(),
+		PreferredWidth: p.sidebar.GetPreferredWidth(),
+	}
+}
+
+// SetSidebarSettings applies sidebar display settings.
+func (p *chatPage) SetSidebarSettings(settings SidebarSettings) {
+	p.sidebar.SetCollapsed(settings.Collapsed)
+	p.sidebar.SetPreferredWidth(settings.PreferredWidth)
 }
 
 // handleSidebarClickType checks what was clicked in the sidebar area.

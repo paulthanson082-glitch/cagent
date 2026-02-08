@@ -388,6 +388,36 @@ func BuildCommandCategories(ctx context.Context, application *app.App) []Categor
 		})
 	}
 
+	// Add skill commands if skills are enabled for the current agent
+	skillsList := application.CurrentAgentSkills()
+	if len(skillsList) > 0 {
+		skillCommands := make([]Item, 0, len(skillsList))
+		for _, skill := range skillsList {
+			skillName := skill.Name
+			description := toolcommon.TruncateText(skill.Description, 55)
+
+			skillCommands = append(skillCommands, Item{
+				ID:           "skill." + skillName,
+				Label:        skillName,
+				Description:  description,
+				Category:     "Skills",
+				SlashCommand: "/" + skillName,
+				Execute: func(arg string) tea.Cmd {
+					input := "/" + skillName
+					if arg = strings.TrimSpace(arg); arg != "" {
+						input += " " + arg
+					}
+					return core.CmdHandler(messages.SendMsg{Content: input})
+				},
+			})
+		}
+
+		categories = append(categories, Category{
+			Name:     "Skills",
+			Commands: skillCommands,
+		})
+	}
+
 	return categories
 }
 

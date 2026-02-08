@@ -14,6 +14,7 @@ import (
 	"github.com/docker/cagent/pkg/chat"
 	"github.com/docker/cagent/pkg/config/latest"
 	"github.com/docker/cagent/pkg/session"
+	"github.com/docker/cagent/pkg/sessiontitle"
 	"github.com/docker/cagent/pkg/team"
 	"github.com/docker/cagent/pkg/tools"
 	"github.com/docker/cagent/pkg/tools/mcp"
@@ -420,12 +421,35 @@ func (r *RemoteRuntime) PermissionsInfo() *PermissionsInfo {
 func (r *RemoteRuntime) ResetStartupInfo() {
 }
 
+// CurrentAgentSkillsEnabled returns whether skills are enabled for the current agent.
+// It reads the agent config from the remote API to determine the skills setting.
+func (r *RemoteRuntime) CurrentAgentSkillsEnabled() bool {
+	cfg := r.readCurrentAgentConfig(context.Background())
+	return cfg.Skills != nil && *cfg.Skills
+}
+
 // UpdateSessionTitle updates the title of the current session on the remote server.
-func (r *RemoteRuntime) UpdateSessionTitle(ctx context.Context, title string) error {
+func (r *RemoteRuntime) UpdateSessionTitle(ctx context.Context, sess *session.Session, title string) error {
+	sess.Title = title
 	if r.sessionID == "" {
 		return fmt.Errorf("cannot update session title: no session ID available")
 	}
 	return r.client.UpdateSessionTitle(ctx, r.sessionID, title)
+}
+
+// CurrentMCPPrompts is not supported on remote runtimes.
+func (r *RemoteRuntime) CurrentMCPPrompts(context.Context) map[string]mcp.PromptInfo {
+	return make(map[string]mcp.PromptInfo)
+}
+
+// ExecuteMCPPrompt is not supported on remote runtimes.
+func (r *RemoteRuntime) ExecuteMCPPrompt(context.Context, string, map[string]string) (string, error) {
+	return "", fmt.Errorf("MCP prompts are not supported by remote runtimes")
+}
+
+// TitleGenerator is not supported on remote runtimes (titles are generated server-side).
+func (r *RemoteRuntime) TitleGenerator() *sessiontitle.Generator {
+	return nil
 }
 
 var _ Runtime = (*RemoteRuntime)(nil)

@@ -987,6 +987,10 @@ func rebuildStyles() {
 		BorderStyle(lipgloss.NormalBorder()).
 		BorderForeground(Success)
 
+	SelectedUserMessageStyle = UserMessageStyle.
+		BorderStyle(lipgloss.ThickBorder()).
+		BorderForeground(Success)
+
 	// Dialog styles
 	DialogStyle = BaseStyle.
 		Border(lipgloss.RoundedBorder()).

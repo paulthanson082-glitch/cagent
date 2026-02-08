@@ -32,7 +32,7 @@ type Skill struct {
 // Global locations (from home directory):
 //   - ~/.codex/skills/ (recursive)
 //   - ~/.claude/skills/ (flat)
-//   - ~/.agents/skills/ (flat)
+//   - ~/.agents/skills/ (recursive)
 //
 // Project locations (from git root up to cwd, closest wins):
 //   - .claude/skills/ (flat, only at cwd)
@@ -50,8 +50,8 @@ func Load() []Skill {
 		for _, skill := range loadSkillsFromDir(filepath.Join(homeDir, ".claude", "skills"), false) {
 			skillMap[skill.Name] = skill
 		}
-		// Load from agents user directory (flat)
-		for _, skill := range loadSkillsFromDir(filepath.Join(homeDir, ".agents", "skills"), false) {
+		// Load from agents user directory (recursive)
+		for _, skill := range loadSkillsFromDir(filepath.Join(homeDir, ".agents", "skills"), true) {
 			skillMap[skill.Name] = skill
 		}
 	}

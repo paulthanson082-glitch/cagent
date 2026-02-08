@@ -152,6 +152,10 @@ var (
 	SelectedMessageStyle = AssistantMessageStyle.
 				BorderStyle(lipgloss.NormalBorder()).
 				BorderForeground(Success)
+
+	SelectedUserMessageStyle = UserMessageStyle.
+					BorderStyle(lipgloss.ThickBorder()).
+					BorderForeground(Success)
 )
 
 // Dialog Styles

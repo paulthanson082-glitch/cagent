@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/goccy/go-yaml"
 
@@ -109,10 +110,107 @@ type ProviderConfig struct {
 	TokenKey string `json:"token_key,omitempty"`
 }
 
+// FallbackConfig represents fallback model configuration for an agent.
+// Controls which models to try when the primary fails and how retries/cooldowns work.
+// Most users only need to specify Models — the defaults handle common scenarios automatically.
+type FallbackConfig struct {
+	// Models is a list of fallback models to try in order if the primary fails.
+	// Each entry can be a model name from the models section or an inline provider/model format.
+	Models []string `json:"models,omitempty"`
+	// Retries is the number of retries per model with exponential backoff.
+	// Default is 2 (giving 3 total attempts per model). Use -1 to disable retries entirely.
+	// Retries only apply to retryable errors (5xx, timeouts); non-retryable errors (429, 4xx)
+	// skip immediately to the next model.
+	Retries int `json:"retries,omitempty"`
+	// Cooldown is the duration to stick with a successful fallback model before
+	// retrying the primary. Only applies after a non-retryable error (e.g., 429).
+	// Default is 1 minute. Use Go duration format (e.g., "1m", "30s", "2m30s").
+	Cooldown Duration `json:"cooldown,omitempty"`
+}
+
+// Duration is a wrapper around time.Duration that supports YAML/JSON unmarshaling
+// from string format (e.g., "1m", "30s", "2h30m").
+type Duration struct {
+	time.Duration
+}
+
+// UnmarshalYAML implements custom unmarshaling for Duration from string format
+func (d *Duration) UnmarshalYAML(unmarshal func(any) error) error {
+	if d == nil {
+		return fmt.Errorf("cannot unmarshal into nil Duration")
+	}
+
+	var s string
+	if err := unmarshal(&s); err != nil {
+		// Try as integer (seconds)
+		var secs int
+		if err2 := unmarshal(&secs); err2 == nil {
+			d.Duration = time.Duration(secs) * time.Second
+			return nil
+		}
+		return err
+	}
+	if s == "" {
+		d.Duration = 0
+		return nil
+	}
+	dur, err := time.ParseDuration(s)
+	if err != nil {
+		return fmt.Errorf("invalid duration format %q: %w", s, err)
+	}
+	d.Duration = dur
+	return nil
+}
+
+// MarshalYAML implements custom marshaling for Duration to string format
+func (d Duration) MarshalYAML() ([]byte, error) {
+	if d.Duration == 0 {
+		return yaml.Marshal("")
+	}
+	return yaml.Marshal(d.String())
+}
+
+// UnmarshalJSON implements custom unmarshaling for Duration from string format
+func (d *Duration) UnmarshalJSON(data []byte) error {
+	if d == nil {
+		return fmt.Errorf("cannot unmarshal into nil Duration")
+	}
+
+	var s string
+	if err := json.Unmarshal(data, &s); err != nil {
+		// Try as integer (seconds)
+		var secs int
+		if err2 := json.Unmarshal(data, &secs); err2 == nil {
+			d.Duration = time.Duration(secs) * time.Second
+			return nil
+		}
+		return err
+	}
+	if s == "" {
+		d.Duration = 0
+		return nil
+	}
+	dur, err := time.ParseDuration(s)
+	if err != nil {
+		return fmt.Errorf("invalid duration format %q: %w", s, err)
+	}
+	d.Duration = dur
+	return nil
+}
+
+// MarshalJSON implements custom marshaling for Duration to string format
+func (d Duration) MarshalJSON() ([]byte, error) {
+	if d.Duration == 0 {
+		return json.Marshal("")
+	}
+	return json.Marshal(d.String())
+}
+
 // AgentConfig represents a single agent configuration
 type AgentConfig struct {
 	Name                    string
 	Model                   string            `json:"model,omitempty"`
+	Fallback                *FallbackConfig   `json:"fallback,omitempty"`
 	Description             string            `json:"description,omitempty"`
 	WelcomeMessage          string            `json:"welcome_message,omitempty"`
 	Toolsets                []Toolset         `json:"toolsets,omitempty"`
@@ -131,6 +229,31 @@ type AgentConfig struct {
 	StructuredOutput        *StructuredOutput `json:"structured_output,omitempty"`
 	Skills                  *bool             `json:"skills,omitempty"`
 	Hooks                   *HooksConfig      `json:"hooks,omitempty"`
+}
+
+// GetFallbackModels returns the fallback models from the config.
+func (a *AgentConfig) GetFallbackModels() []string {
+	if a.Fallback != nil {
+		return a.Fallback.Models
+	}
+	return nil
+}
+
+// GetFallbackRetries returns the fallback retries from the config.
+func (a *AgentConfig) GetFallbackRetries() int {
+	if a.Fallback != nil {
+		return a.Fallback.Retries
+	}
+	return 0
+}
+
+// GetFallbackCooldown returns the fallback cooldown duration from the config.
+// Returns the configured cooldown, or 0 if not set (caller should apply default).
+func (a *AgentConfig) GetFallbackCooldown() time.Duration {
+	if a.Fallback != nil {
+		return a.Fallback.Cooldown.Duration
+	}
+	return 0
 }
 
 // ModelConfig represents the configuration for a model
@@ -361,7 +484,7 @@ type SandboxConfig struct {
 // DeferConfig represents the deferred loading configuration for a toolset.
 // It can be either a boolean (true to defer all tools) or a slice of strings
 // (list of tool names to defer).
-type DeferConfig struct {
+type DeferConfig struct { //nolint:recvcheck // MarshalYAML must use value receiver for YAML slice encoding, UnmarshalYAML must use pointer
 	// DeferAll is true when all tools should be deferred
 	DeferAll bool `json:"-"`
 	// Tools is the list of specific tool names to defer (empty if DeferAll is true)
@@ -512,7 +635,7 @@ func (c *RAGConfig) GetRespectVCS() bool {
 
 // RAGStrategyConfig represents a single retrieval strategy configuration
 // Strategy-specific fields are stored in Params (validated by strategy implementation)
-type RAGStrategyConfig struct {
+type RAGStrategyConfig struct { //nolint:recvcheck // Marshal methods must use value receiver for YAML/JSON slice encoding, Unmarshal must use pointer
 	Type     string            `json:"type"`               // Strategy type: "chunked-embeddings", "bm25", etc.
 	Docs     []string          `json:"docs,omitempty"`     // Strategy-specific documents (augments shared docs)
 	Database RAGDatabaseConfig `json:"database,omitempty"` // Database configuration

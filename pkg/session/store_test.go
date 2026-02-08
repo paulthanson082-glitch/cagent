@@ -221,6 +221,89 @@ func TestGetSessionSummaries(t *testing.T) {
 	assert.Equal(t, session1Time, summaries[1].CreatedAt)
 }
 
+func TestBranchSessionCopiesPrefix(t *testing.T) {
+	tempDB := filepath.Join(t.TempDir(), "test_branch_prefix.db")
+
+	store, err := NewSQLiteSessionStore(tempDB)
+	require.NoError(t, err)
+	defer store.(*SQLiteSessionStore).Close()
+
+	testAgent := agent.New("test-agent", "test prompt")
+	parent := &Session{
+		ID:        "parent-session",
+		CreatedAt: time.Now(),
+		Messages: []Item{
+			NewMessageItem(UserMessage("Hello")),
+			NewMessageItem(NewAgentMessage(testAgent, &chat.Message{
+				Role:    chat.MessageRoleAssistant,
+				Content: "Response",
+			})),
+			NewMessageItem(UserMessage("Edited")),
+		},
+	}
+
+	require.NoError(t, store.AddSession(t.Context(), parent))
+
+	branched, err := store.BranchSession(t.Context(), parent.ID, 2)
+	require.NoError(t, err)
+	require.NotNil(t, branched.BranchParentPosition)
+	assert.Equal(t, parent.ID, branched.BranchParentSessionID)
+	assert.Equal(t, 2, *branched.BranchParentPosition)
+	require.NotNil(t, branched.BranchCreatedAt)
+
+	loaded, err := store.GetSession(t.Context(), branched.ID)
+	require.NoError(t, err)
+	require.NotNil(t, loaded.BranchParentPosition)
+	assert.Equal(t, parent.ID, loaded.BranchParentSessionID)
+	assert.Equal(t, 2, *loaded.BranchParentPosition)
+	require.NotNil(t, loaded.BranchCreatedAt)
+
+	require.Len(t, loaded.Messages, 2)
+	assert.Equal(t, "Hello", loaded.Messages[0].Message.Message.Content)
+	assert.Equal(t, "Response", loaded.Messages[1].Message.Message.Content)
+}
+
+func TestBranchSessionClonesSubSession(t *testing.T) {
+	tempDB := filepath.Join(t.TempDir(), "test_branch_subsession.db")
+
+	store, err := NewSQLiteSessionStore(tempDB)
+	require.NoError(t, err)
+	defer store.(*SQLiteSessionStore).Close()
+
+	subSession := &Session{
+		ID:        "sub-session",
+		CreatedAt: time.Now(),
+		Messages: []Item{
+			NewMessageItem(UserMessage("Sub message")),
+		},
+	}
+	parent := &Session{
+		ID:        "parent-session",
+		CreatedAt: time.Now(),
+		Messages: []Item{
+			NewMessageItem(UserMessage("Start")),
+			NewSubSessionItem(subSession),
+			NewMessageItem(UserMessage("After")),
+		},
+	}
+
+	require.NoError(t, store.AddSession(t.Context(), parent))
+
+	branched, err := store.BranchSession(t.Context(), parent.ID, 2)
+	require.NoError(t, err)
+
+	loaded, err := store.GetSession(t.Context(), branched.ID)
+	require.NoError(t, err)
+	require.Len(t, loaded.Messages, 2)
+
+	subItem := loaded.Messages[1]
+	require.NotNil(t, subItem.SubSession)
+	assert.NotEqual(t, subSession.ID, subItem.SubSession.ID)
+	assert.Equal(t, loaded.ID, subItem.SubSession.ParentID)
+	require.Len(t, subItem.SubSession.Messages, 1)
+	assert.Equal(t, "Sub message", subItem.SubSession.Messages[0].Message.Message.Content)
+}
+
 func TestStoreAgentNameJSON(t *testing.T) {
 	tempDB := filepath.Join(t.TempDir(), "test_store_json.db")
 

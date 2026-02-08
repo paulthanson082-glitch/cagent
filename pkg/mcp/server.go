@@ -3,6 +3,7 @@ package mcp
 import (
 	"cmp"
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -74,7 +75,7 @@ func StartHTTPServer(ctx context.Context, agentFilename, agentName string, runCo
 	case <-ctx.Done():
 		return httpServer.Shutdown(context.Background())
 	case err := <-errCh:
-		if err == http.ErrServerClosed {
+		if errors.Is(err, http.ErrServerClosed) {
 			return nil
 		}
 		return err

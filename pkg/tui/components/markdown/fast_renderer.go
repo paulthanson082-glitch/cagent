@@ -2303,7 +2303,7 @@ func (p *parser) wrapText(text string, width int) string {
 		wordWidth := ws.width
 
 		// Determine if we need to wrap - only then do we need the previous styles
-		needsWrap := false
+		var needsWrap bool
 		if wordWidth > width {
 			needsWrap = currentLine.Len() > 0
 		} else {

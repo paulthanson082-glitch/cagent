@@ -38,7 +38,11 @@ func (c *Client) createBetaStream(
 		return nil, err
 	}
 
-	converted := convertBetaMessages(messages)
+	converted, err := c.convertBetaMessages(ctx, messages)
+	if err != nil {
+		slog.Error("Failed to convert messages for Anthropic Beta request", "error", err)
+		return nil, err
+	}
 	if err := validateAnthropicSequencingBeta(converted); err != nil {
 		slog.Warn("Invalid message sequencing for Anthropic Beta API detected, attempting self-repair", "error", err)
 		converted = repairAnthropicSequencingBeta(converted)
@@ -50,13 +54,25 @@ func (c *Client) createBetaStream(
 
 	sys := extractBetaSystemBlocks(messages)
 
+	// Check if messages contain file attachments to include the files-api beta header
+	needsFilesAPI := hasFileAttachments(messages)
+
+	betas := []anthropic.AnthropicBeta{
+		anthropic.AnthropicBetaInterleavedThinking2025_05_14,
+		"fine-grained-tool-streaming-2025-05-14",
+	}
+	if needsFilesAPI {
+		betas = append(betas, filesAPIBeta)
+		slog.Debug("Anthropic Beta API: Including files-api beta header for file attachments")
+	}
+
 	params := anthropic.BetaMessageNewParams{
 		Model:     anthropic.Model(c.ModelConfig.Model),
 		MaxTokens: maxTokens,
 		System:    sys,
 		Messages:  converted,
 		Tools:     allTools,
-		Betas:     []anthropic.AnthropicBeta{anthropic.AnthropicBetaInterleavedThinking2025_05_14, "fine-grained-tool-streaming-2025-05-14"},
+		Betas:     betas,
 	}
 
 	// Apply structured output configuration

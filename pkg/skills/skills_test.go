@@ -337,6 +337,62 @@ description: A global agents skill
 	assert.True(t, found, "Expected to find global-skill from ~/.agents/skills")
 }
 
+func TestLoad_AgentsSkillsGlobalRecursive(t *testing.T) {
+	// Create a temp home directory with nested .agents/skills
+	tmpHome := t.TempDir()
+	t.Setenv("HOME", tmpHome)
+
+	// Create a deeply nested skill under ~/.agents/skills/
+	nestedSkillDir := filepath.Join(tmpHome, ".agents", "skills", "project-a", "skill-one")
+	require.NoError(t, os.MkdirAll(nestedSkillDir, 0o755))
+
+	skillContent := `---
+name: skill-one
+description: A nested global agents skill
+---
+
+# Nested Skill
+`
+	require.NoError(t, os.WriteFile(filepath.Join(nestedSkillDir, "SKILL.md"), []byte(skillContent), 0o644))
+
+	// Also create a flat skill to make sure both work
+	flatSkillDir := filepath.Join(tmpHome, ".agents", "skills", "flat-skill")
+	require.NoError(t, os.MkdirAll(flatSkillDir, 0o755))
+
+	flatContent := `---
+name: flat-skill
+description: A flat global agents skill
+---
+
+# Flat Skill
+`
+	require.NoError(t, os.WriteFile(filepath.Join(flatSkillDir, "SKILL.md"), []byte(flatContent), 0o644))
+
+	// Change to a temp directory that doesn't have any skills
+	tmpCwd := t.TempDir()
+	t.Chdir(tmpCwd)
+
+	skills := Load()
+
+	// Both nested and flat skills should be found
+	foundNested := false
+	foundFlat := false
+	for _, s := range skills {
+		switch s.Name {
+		case "skill-one":
+			foundNested = true
+			assert.Equal(t, "A nested global agents skill", s.Description)
+			assert.Equal(t, filepath.Join(nestedSkillDir, "SKILL.md"), s.FilePath)
+		case "flat-skill":
+			foundFlat = true
+			assert.Equal(t, "A flat global agents skill", s.Description)
+			assert.Equal(t, filepath.Join(flatSkillDir, "SKILL.md"), s.FilePath)
+		}
+	}
+	assert.True(t, foundNested, "Expected to find nested skill-one from ~/.agents/skills/project-a/skill-one")
+	assert.True(t, foundFlat, "Expected to find flat-skill from ~/.agents/skills/flat-skill")
+}
+
 func TestLoad_AgentsSkillsProjectFromNestedDir(t *testing.T) {
 	// Create a fake git repo with .agents/skills at the root
 	tmpRepo := t.TempDir()

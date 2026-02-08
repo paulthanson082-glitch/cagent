@@ -312,6 +312,7 @@ In the TUI, you can click on the pencil icon (✎) next to the session title in 
 |------------------------|--------------|-----------------------------------------------------------------|----------|
 | `name`                 | string       | Agent identifier                                                | ✓        |
 | `model`                | string       | Model reference                                                 | ✓        |
+| `fallback`             | object       | Fallback model configuration (see below)                        | ✗        |
 | `description`          | string       | Agent purpose                                                   | ✓        |
 | `instruction`          | string       | Detailed behavior instructions                                  | ✓        |
 | `sub_agents`           | array        | List of sub-agent names                                         | ✗        |
@@ -321,6 +322,26 @@ In the TUI, you can click on the pencil icon (✎) next to the session title in 
 | `max_iterations`       | int          | Specifies how many times the agent can loop when using tools    | ✗        |
 | `commands`             | object/array | Named prompts for /commands                                     | ✗        |
 
+#### Fallback Configuration
+
+The `fallback` object configures automatic failover when the primary model fails. **Most users only need to specify `models`** — the defaults handle common scenarios automatically.
+
+| Property   | Type   | Description                                                                                       | Default |
+|------------|--------|---------------------------------------------------------------------------------------------------|---------|
+| `models`   | array  | List of fallback models to try in order (model names or `provider/model` format)                 | `[]`    |
+| `retries`  | int    | Number of retries per model with exponential backoff for retryable errors (5xx, timeouts). Use `-1` to disable retries entirely. | `2`     |
+| `cooldown` | string | Duration to stick with a successful fallback after a non-retryable error (e.g., 429). Uses Go duration format (e.g., `1m`, `30s`) | `1m`    |
+
+**Sensible Defaults:**
+- **`retries: 2`** — Each model gets 3 total attempts (initial + 2 retries) before moving to the next. This handles transient 5xx errors gracefully.
+- **`cooldown: 1m`** — After a rate limit (429), stick with the fallback for 1 minute before retrying the primary.
+
+**Error Classification:**
+- **Retryable errors** (retry same model with backoff): HTTP 5xx, 408, network timeouts, connection errors
+- **Non-retryable errors** (skip to next model immediately): HTTP 429 (rate limit), 4xx client errors
+
+When a non-retryable error like 429 occurs, the runtime switches to the next fallback model and "sticks" with it for the `cooldown` duration before attempting the primary again.
+
 #### Example
 
 ```yaml
@@ -329,6 +350,12 @@ agents:
     model: string # Model reference
     description: string # Agent purpose
     instruction: string # Detailed behavior instructions
+    fallback: # Fallback configuration (optional)
+      models: # Fallback models to try in order
+        - openai/gpt-4o
+        - anthropic/claude-sonnet-4-0
+      retries: 2 # Retries per model for 5xx errors (default: 2)
+      cooldown: 1m # How long to stick with fallback after 429 (default: 1m)
     tools: [] # Available tools (optional)
     sub_agents: [] # Sub-agent names (optional)
     add_date: boolean # Add current date to context (optional)
@@ -1090,7 +1117,7 @@ Skills are automatically discovered from the following locations (in order, late
 **Global locations** (from home directory):
 - `~/.codex/skills/` — Recursive search (Codex format)
 - `~/.claude/skills/` — Flat search (Claude format)
-- `~/.agents/skills/` — Flat search (Agent Skills standard)
+- `~/.agents/skills/` — Recursive search (Agent Skills standard)
 
 **Project locations** (from git root up to current directory):
 - `.claude/skills/` — Flat search, only at current working directory

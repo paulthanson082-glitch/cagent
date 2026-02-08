@@ -30,18 +30,24 @@ func newAgentContext(agentName string) AgentContext {
 
 // UserMessageEvent is sent when a user message is received
 type UserMessageEvent struct {
-	Type      string `json:"type"`
-	Message   string `json:"message"`
-	SessionID string `json:"session_id"`
+	Type            string `json:"type"`
+	Message         string `json:"message"`
+	SessionID       string `json:"session_id"`
+	SessionPosition int    `json:"session_position"` // Index in session.Messages, -1 if unknown
 	AgentContext
 }
 
-func UserMessage(message, sessionID string) Event {
+func UserMessage(message, sessionID string, sessionPos ...int) Event {
+	pos := -1
+	if len(sessionPos) > 0 {
+		pos = sessionPos[0]
+	}
 	return &UserMessageEvent{
-		Type:         "user_message",
-		Message:      message,
-		SessionID:    sessionID,
-		AgentContext: newAgentContext(""),
+		Type:            "user_message",
+		Message:         message,
+		SessionID:       sessionID,
+		SessionPosition: pos,
+		AgentContext:    newAgentContext(""),
 	}
 }
 
@@ -195,6 +201,33 @@ func Warning(message, agentName string) Event {
 		Type:         "warning",
 		Message:      message,
 		AgentContext: newAgentContext(agentName),
+	}
+}
+
+// ModelFallbackEvent is emitted when the runtime switches to a fallback model
+// after the previous model in the chain fails. This can happen due to:
+// - Retryable errors (5xx, timeouts) after exhausting retries
+// - Non-retryable errors (429, 4xx) which skip retries and move immediately to fallback
+type ModelFallbackEvent struct {
+	Type          string `json:"type"`
+	FailedModel   string `json:"failed_model"`
+	FallbackModel string `json:"fallback_model"`
+	Reason        string `json:"reason"`
+	Attempt       int    `json:"attempt"`      // Current attempt number (1-indexed)
+	MaxAttempts   int    `json:"max_attempts"` // Total attempts allowed for this model
+	AgentContext
+}
+
+// ModelFallback creates a new ModelFallbackEvent.
+func ModelFallback(agentName, failedModel, fallbackModel, reason string, attempt, maxAttempts int) Event {
+	return &ModelFallbackEvent{
+		Type:          "model_fallback",
+		FailedModel:   failedModel,
+		FallbackModel: fallbackModel,
+		Reason:        reason,
+		Attempt:       attempt,
+		MaxAttempts:   maxAttempts,
+		AgentContext:  AgentContext{AgentName: agentName},
 	}
 }
 

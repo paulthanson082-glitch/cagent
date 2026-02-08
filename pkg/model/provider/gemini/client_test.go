@@ -286,24 +286,32 @@ func TestBuildConfig_ThinkingExplicitlyDisabled(t *testing.T) {
 	// Test that when ModelOptions.Thinking() returns false, thinking is explicitly disabled.
 	// This is important for operations like title generation where max_tokens is very low.
 	tests := []struct {
-		name           string
-		model          string
-		thinkingBudget *latest.ThinkingBudget // Would normally enable thinking
+		name               string
+		model              string
+		thinkingBudget     *latest.ThinkingBudget // Would normally enable thinking
+		expectBudgetZero   bool                   // Gemini 2.5: ThinkingBudget=0
+		expectLevelLow     bool                   // Gemini 3: ThinkingLevelLow (cannot fully disable)
+		expectMinMaxTokens int32                  // Gemini 3: bumped MaxOutputTokens
 	}{
 		{
-			name:           "gemini-3-flash-preview with thinking budget but disabled via options",
-			model:          "gemini-3-flash-preview",
-			thinkingBudget: &latest.ThinkingBudget{Effort: "medium"},
+			name:               "gemini-3-flash-preview with thinking budget but disabled via options",
+			model:              "gemini-3-flash-preview",
+			thinkingBudget:     &latest.ThinkingBudget{Effort: "medium"},
+			expectLevelLow:     true,
+			expectMinMaxTokens: 200,
 		},
 		{
-			name:           "gemini-2.5-flash with thinking budget but disabled via options",
-			model:          "gemini-2.5-flash",
-			thinkingBudget: &latest.ThinkingBudget{Tokens: 8192},
+			name:             "gemini-2.5-flash with thinking budget but disabled via options",
+			model:            "gemini-2.5-flash",
+			thinkingBudget:   &latest.ThinkingBudget{Tokens: 8192},
+			expectBudgetZero: true,
 		},
 		{
-			name:           "gemini-3-pro with nil thinking budget but disabled via options",
-			model:          "gemini-3-pro",
-			thinkingBudget: nil, // Even without explicit budget, Gemini 3 may use thinking by default
+			name:               "gemini-3-pro with nil thinking budget but disabled via options",
+			model:              "gemini-3-pro",
+			thinkingBudget:     nil, // Even without explicit budget, Gemini 3 may use thinking by default
+			expectLevelLow:     true,
+			expectMinMaxTokens: 200,
 		},
 	}
 
@@ -328,16 +336,23 @@ func TestBuildConfig_ThinkingExplicitlyDisabled(t *testing.T) {
 
 			config := client.buildConfig()
 
-			// ThinkingConfig should be set with IncludeThoughts=false and ThinkingBudget=0
 			require.NotNil(t, config.ThinkingConfig, "ThinkingConfig should be explicitly set when thinking is disabled")
-			assert.False(t, config.ThinkingConfig.IncludeThoughts, "IncludeThoughts should be false when thinking is disabled")
 
-			// ThinkingBudget should be 0 to disable thinking completely
-			require.NotNil(t, config.ThinkingConfig.ThinkingBudget, "ThinkingBudget should be set to 0 when thinking is disabled")
-			assert.Equal(t, int32(0), *config.ThinkingConfig.ThinkingBudget, "ThinkingBudget should be 0 when thinking is disabled")
+			if tt.expectBudgetZero {
+				// Gemini 2.5: fully disabled via ThinkingBudget=0
+				assert.False(t, config.ThinkingConfig.IncludeThoughts, "IncludeThoughts should be false")
+				require.NotNil(t, config.ThinkingConfig.ThinkingBudget, "ThinkingBudget should be set to 0")
+				assert.Equal(t, int32(0), *config.ThinkingConfig.ThinkingBudget, "ThinkingBudget should be 0")
+				assert.Empty(t, config.ThinkingConfig.ThinkingLevel, "ThinkingLevel should be empty")
+			}
 
-			// ThinkingLevel should be empty/unset
-			assert.Empty(t, config.ThinkingConfig.ThinkingLevel, "ThinkingLevel should be empty when thinking is disabled")
+			if tt.expectLevelLow {
+				// Gemini 3: cannot fully disable, use lowest level
+				assert.False(t, config.ThinkingConfig.IncludeThoughts, "IncludeThoughts should be false")
+				assert.Equal(t, genai.ThinkingLevelLow, config.ThinkingConfig.ThinkingLevel, "ThinkingLevel should be low")
+				assert.Nil(t, config.ThinkingConfig.ThinkingBudget, "ThinkingBudget should not be set for Gemini 3")
+				assert.GreaterOrEqual(t, config.MaxOutputTokens, tt.expectMinMaxTokens, "MaxOutputTokens should be bumped")
+			}
 		})
 	}
 }

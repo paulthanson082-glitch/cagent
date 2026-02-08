@@ -3,7 +3,6 @@ package cli
 import (
 	"cmp"
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -316,78 +315,46 @@ func ParseAttachCommand(userInput string) (messageText, attachPath string) {
 	return messageText, attachPath
 }
 
-// CreateUserMessageWithAttachment creates a user message with optional image attachment
+// CreateUserMessageWithAttachment creates a user message with optional file attachment.
+// The attachment is stored as a file reference (path + MIME type) rather than base64-encoded
+// content. The actual upload to the provider's file storage happens at request time.
 func CreateUserMessageWithAttachment(userContent, attachmentPath string) *session.Message {
 	if attachmentPath == "" {
 		return session.UserMessage(userContent)
 	}
 
-	// Convert file to data URL
-	dataURL, err := fileToDataURL(attachmentPath)
+	// Validate file exists
+	absPath, err := filepath.Abs(attachmentPath)
 	if err != nil {
-		slog.Warn("Failed to attach file", "path", attachmentPath, "error", err)
+		slog.Warn("Failed to get absolute path for attachment", "path", attachmentPath, "error", err)
 		return session.UserMessage(userContent)
 	}
+
+	if _, err := os.Stat(absPath); os.IsNotExist(err) {
+		slog.Warn("Attachment file does not exist", "path", absPath)
+		return session.UserMessage(userContent)
+	}
+
+	// Determine MIME type
+	mimeType := chat.DetectMimeType(absPath)
 
 	// Ensure we have some text content when attaching a file
 	textContent := cmp.Or(strings.TrimSpace(userContent), "Please analyze this attached file.")
 
-	// Create message with multi-content including text and image
+	// Create message with multi-content including text and file reference
 	multiContent := []chat.MessagePart{
 		{
 			Type: chat.MessagePartTypeText,
 			Text: textContent,
 		},
 		{
-			Type: chat.MessagePartTypeImageURL,
-			ImageURL: &chat.MessageImageURL{
-				URL:    dataURL,
-				Detail: chat.ImageURLDetailAuto,
+			Type: chat.MessagePartTypeFile,
+			File: &chat.MessageFile{
+				Path:     absPath,
+				MimeType: mimeType,
 			},
 		},
 	}
 
 	return session.UserMessage("", multiContent...)
-}
-
-// fileToDataURL converts a file to a data URL
-func fileToDataURL(filePath string) (string, error) {
-	// Check if file exists
-	if _, err := os.Stat(filePath); os.IsNotExist(err) {
-		return "", fmt.Errorf("file does not exist: %s", filePath)
-	}
-
-	// Read file content
-	fileBytes, err := os.ReadFile(filePath)
-	if err != nil {
-		return "", fmt.Errorf("failed to read file: %w", err)
-	}
-
-	// Determine MIME type based on file extension
-	ext := strings.ToLower(filepath.Ext(filePath))
-	var mimeType string
-	switch ext {
-	case ".jpg", ".jpeg":
-		mimeType = "image/jpeg"
-	case ".png":
-		mimeType = "image/png"
-	case ".gif":
-		mimeType = "image/gif"
-	case ".webp":
-		mimeType = "image/webp"
-	case ".bmp":
-		mimeType = "image/bmp"
-	case ".svg":
-		mimeType = "image/svg+xml"
-	default:
-		return "", fmt.Errorf("unsupported image format: %s", ext)
-	}
-
-	// Encode to base64
-	encoded := base64.StdEncoding.EncodeToString(fileBytes)
-
-	// Create data URL
-	dataURL := fmt.Sprintf("data:%s;base64,%s", mimeType, encoded)
-
-	return dataURL, nil
 }

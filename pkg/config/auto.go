@@ -32,11 +32,11 @@ var cloudProviders = []providerConfig{
 	}, "AWS_ACCESS_KEY_ID (or AWS_PROFILE, AWS_ROLE_ARN, AWS_BEARER_TOKEN_BEDROCK)"},
 }
 
-// ErrAutoModelFallback is returned when auto model selection fails because
+// AutoModelFallbackError is returned when auto model selection fails because
 // no providers are available (no API keys configured and DMR not installed).
-type ErrAutoModelFallback struct{}
+type AutoModelFallbackError struct{}
 
-func (e *ErrAutoModelFallback) Error() string {
+func (e *AutoModelFallbackError) Error() string {
 	var hints []string
 	for _, p := range cloudProviders {
 		hints = append(hints, fmt.Sprintf("    - %s: %s", p.name, p.hint))

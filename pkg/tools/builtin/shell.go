@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"cmp"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -242,7 +243,8 @@ func (h *shellHandler) monitorJob(job *backgroundJob, cmd *exec.Cmd) {
 	}
 
 	if err != nil {
-		if exitErr, ok := err.(*exec.ExitError); ok {
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) {
 			job.exitCode = exitErr.ExitCode()
 		} else {
 			job.exitCode = -1

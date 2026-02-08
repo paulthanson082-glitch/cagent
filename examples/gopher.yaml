@@ -3,7 +3,7 @@
 models:
   claude:
     provider: anthropic
-    model: claude-opus-4-5
+    model: claude-opus-4-6
   haiku:
     provider: anthropic
     model: claude-haiku-4-5
@@ -12,6 +12,7 @@ agents:
   root:
     model: claude
     description: Expert Golang Developer specialized in implementing features and improving code quality.
+    skills: true
     instruction: |
       **Goal:**
       Help with Go code-related tasks by examining, modifying, and validating code changes.

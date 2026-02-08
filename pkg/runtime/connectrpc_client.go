@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -241,7 +242,7 @@ func (c *ConnectRPCClient) runAgentWithAgentName(ctx context.Context, sessionID,
 			}
 		}
 
-		if err := stream.Err(); err != nil && err != io.EOF {
+		if err := stream.Err(); err != nil && !errors.Is(err, io.EOF) {
 			slog.Error("Stream error", "error", err)
 			eventChan <- Error(fmt.Sprintf("stream error: %v", err))
 		}

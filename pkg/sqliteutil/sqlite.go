@@ -88,5 +88,5 @@ func DiagnoseDBOpenError(path string, originalErr error) error {
 		return fmt.Errorf("cannot create database at %q: %q is not a directory", path, dir)
 	}
 
-	return fmt.Errorf("cannot create database at %q: permission denied or file cannot be created in %q (original error: %v)", path, dir, originalErr)
+	return fmt.Errorf("cannot create database at %q: permission denied or file cannot be created in %q (original error: %w)", path, dir, originalErr)
 }

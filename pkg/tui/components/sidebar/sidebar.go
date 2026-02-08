@@ -50,6 +50,7 @@ type Model interface {
 	SetTeamInfo(availableAgents []runtime.AgentDetails)
 	SetAgentSwitching(switching bool)
 	SetToolsetInfo(availableTools int, loading bool)
+	SetSkillsInfo(availableSkills int)
 	SetSessionStarred(starred bool)
 	SetQueuedMessages(messages ...string)
 	GetSize() (width, height int)
@@ -122,6 +123,7 @@ type model struct {
 	availableAgents    []runtime.AgentDetails
 	agentSwitching     bool
 	availableTools     int
+	availableSkills    int
 	toolsLoading       bool // true when more tools may still be loading
 	sessionState       *service.SessionState
 	workingAgent       string // Name of the agent currently working (empty if none)
@@ -247,16 +249,19 @@ func (m *model) SetAgentInfo(agentName, modelID, description string) {
 	m.agentDescription = description
 	m.reasoningSupported = modelsdev.ModelSupportsReasoning(context.Background(), modelID)
 
-	// Update the model in availableAgents for the current agent
-	// This is important when model routing selects a different model than configured
-	// Extract just the model name from "provider/model" format to match TeamInfoEvent format
+	// Update the provider and model in availableAgents for the current agent.
+	// This is important when fallback models from different providers are used.
+	// Parse "provider/model" format using first slash to handle model names containing slashes
+	// (e.g., "dmr/ai/llama3.2" → Provider="dmr", Model="ai/llama3.2").
 	for i := range m.availableAgents {
 		if m.availableAgents[i].Name == agentName && modelID != "" {
-			modelName := modelID
-			if idx := strings.LastIndex(modelName, "/"); idx != -1 {
-				modelName = modelName[idx+1:]
+			if provider, modelName, found := strings.Cut(modelID, "/"); found {
+				m.availableAgents[i].Provider = provider
+				m.availableAgents[i].Model = modelName
+			} else {
+				// No slash in modelID; treat the whole string as model name
+				m.availableAgents[i].Model = modelID
 			}
-			m.availableAgents[i].Model = modelName
 			break
 		}
 	}
@@ -279,6 +284,12 @@ func (m *model) SetAgentSwitching(switching bool) {
 func (m *model) SetToolsetInfo(availableTools int, loading bool) {
 	m.availableTools = availableTools
 	m.toolsLoading = loading
+	m.invalidateCache()
+}
+
+// SetSkillsInfo sets the number of available skills
+func (m *model) SetSkillsInfo(availableSkills int) {
+	m.availableSkills = availableSkills
 	m.invalidateCache()
 }
 
@@ -1122,6 +1133,11 @@ func (m *model) toolsetInfo(contentWidth int) string {
 	// Tools status line
 	lines = append(lines, m.renderToolsStatus())
 
+	// Skills status line
+	if m.availableSkills > 0 {
+		lines = append(lines, m.renderSkillsStatus())
+	}
+
 	// Toggle indicators with shortcuts
 	// Only show "Thinking enabled" if the model supports reasoning
 	toggles := []struct {
@@ -1162,6 +1178,15 @@ func (m *model) renderToolsStatus() string {
 	return ""
 }
 
+// renderSkillsStatus renders the skills available status line
+func (m *model) renderSkillsStatus() string {
+	label := "skills available"
+	if m.availableSkills == 1 {
+		label = "skill available"
+	}
+	return styles.TabAccentStyle.Render("█") + styles.TabPrimaryStyle.Render(fmt.Sprintf(" %d %s", m.availableSkills, label))
+}
+
 // renderToggleIndicator renders a toggle status with its keyboard shortcut
 func (m *model) renderToggleIndicator(label, shortcut string, contentWidth int) string {
 	indicator := styles.TabAccentStyle.Render("✓") + styles.TabPrimaryStyle.Render(" "+label)
@@ -1182,8 +1207,7 @@ func (m *model) SetSize(width, height int) tea.Cmd {
 // updateTitleInputWidth pre-calculates the title input width based on current dimensions.
 // This avoids setting width during View(), keeping View() pure.
 func (m *model) updateTitleInputWidth() {
-	star := m.starIndicator()
-	starWidth := lipgloss.Width(star)
+	starWidth := lipgloss.Width(m.starIndicator())
 
 	// Calculate content width (without scrollbar for simplicity - editing usually doesn't need scrollbar)
 	contentWidth := m.contentWidth(false)

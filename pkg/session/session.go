@@ -105,6 +105,16 @@ type Session struct {
 	// These are shown in the model picker for easy re-selection.
 	CustomModelsUsed []string `json:"custom_models_used,omitempty"`
 
+	// BranchParentSessionID indicates this session was branched from another session.
+	BranchParentSessionID string `json:"branch_parent_session_id,omitempty"`
+
+	// BranchParentPosition is the parent session item position where this branch occurred.
+	// Only set when BranchParentSessionID is non-empty.
+	BranchParentPosition *int `json:"branch_parent_position,omitempty"`
+
+	// BranchCreatedAt is the time when this branch session was created.
+	BranchCreatedAt *time.Time `json:"branch_created_at,omitempty"`
+
 	// ParentID indicates this is a sub-session created by task transfer.
 	// Sub-sessions are not persisted as standalone entries; they are embedded
 	// within the parent session's Messages array.
@@ -263,7 +273,11 @@ func (s *Session) GetLastUserMessageContent() string {
 }
 
 // GetLastUserMessages returns up to n most recent user messages, ordered from oldest to newest.
+// Returns nil if n <= 0.
 func (s *Session) GetLastUserMessages(n int) []string {
+	if n <= 0 {
+		return nil
+	}
 	messages := s.GetAllMessages()
 	var userMessages []string
 	for i := range messages {
@@ -435,7 +449,7 @@ func buildInvariantSystemMessages(a *agent.Agent) []chat.Message {
 	var messages []chat.Message
 
 	if a.HasSubAgents() {
-		subAgents := append(a.SubAgents(), a.Parents()...)
+		subAgents := a.SubAgents()
 
 		var text strings.Builder
 		var validAgentIDs []string

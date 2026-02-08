@@ -6,6 +6,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -428,7 +429,7 @@ func StreamCopy(c echo.Context, resp *http.Response) error {
 			}
 			if result.err != nil {
 				// io.EOF or context canceled means normal completion
-				if result.err == io.EOF || ctx.Err() != nil {
+				if errors.Is(result.err, io.EOF) || ctx.Err() != nil {
 					return nil
 				}
 				slog.ErrorContext(ctx, "stream read error", "error", result.err)

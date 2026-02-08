@@ -2,6 +2,7 @@ package fsx
 
 import (
 	"context"
+	"errors"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -209,7 +210,7 @@ func WalkFiles(ctx context.Context, root string, opts WalkFilesOptions) ([]strin
 		return nil
 	})
 
-	if err != nil && err != context.Canceled && err != context.DeadlineExceeded {
+	if err != nil && !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
 		return files, err
 	}
 

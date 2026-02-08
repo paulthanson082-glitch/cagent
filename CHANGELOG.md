@@ -3,6 +3,60 @@
 All notable changes to this project will be documented in this file.
 
 
+## [v1.20.6] - 2026-02-07
+
+This release introduces branching sessions, model fallbacks, and automated code quality scanning, along with performance improvements and enhanced file handling capabilities.
+
+## What's New
+
+- Adds branching sessions feature that allows editing previous messages to create new session branches without losing original conversation history
+- Adds automated nightly codebase scanner with multi-agent architecture for detecting code quality issues and creating GitHub issues
+- Adds model fallback system that automatically retries with alternative models when inference providers fail
+- Adds skill invocation via slash commands for enhanced workflow automation
+- Adds `--prompt-file` CLI flag for including file contents as system context
+- Adds debug title command for troubleshooting session title generation
+
+## Improvements
+
+- Improves @ attachment performance to prevent UI hanging in large or deeply nested directories
+- Switches to Anthropic Files API for file uploads instead of embedding content directly, dramatically reducing token usage
+- Enhances scanner resilience and adds persistent memory system for learning from previous runs
+
+## Bug Fixes
+
+- Fixes tool calls score rendering in evaluations
+- Fixes title generation for OpenAI and Gemini models
+- Fixes GitHub Actions directory creation issues
+
+## Technical Changes
+
+- Refactors to use cagent's built-in memory system and text format for sub-agent output
+- Enables additional golangci-lint linters and fixes code quality issues
+- Simplifies PR review workflow by adopting reusable workflow from cagent-action
+- Updates Model Context Protocol SDK and other dependencies
+
+### Pull Requests
+
+- [#1573](https://github.com/docker/cagent/pull/1573) - Automated nightly codebase scanner
+- [#1578](https://github.com/docker/cagent/pull/1578) - Branching sessions on message edit
+- [#1589](https://github.com/docker/cagent/pull/1589) - Model fallbacks
+- [#1595](https://github.com/docker/cagent/pull/1595) - Simplifies PR review workflow by adopting the new reusable workflow from cagent-action
+- [#1610](https://github.com/docker/cagent/pull/1610) - docs: update CHANGELOG.md for v1.20.5
+- [#1611](https://github.com/docker/cagent/pull/1611) - Improve @ attachments perf 
+- [#1612](https://github.com/docker/cagent/pull/1612) - Only create a new modelstore if none is given
+- [#1613](https://github.com/docker/cagent/pull/1613) - [evals] Fix tool calls score rendering
+- [#1614](https://github.com/docker/cagent/pull/1614) - Added space between release links
+- [#1617](https://github.com/docker/cagent/pull/1617) - Opus 4.6
+- [#1618](https://github.com/docker/cagent/pull/1618) - feat: add --prompt-file CLI flag for including file contents as system context
+- [#1619](https://github.com/docker/cagent/pull/1619) - Update Nightly Scan Workflow
+- [#1620](https://github.com/docker/cagent/pull/1620) - /attach use file upload instead of embedding in the context
+- [#1621](https://github.com/docker/cagent/pull/1621) - Update Go deps
+- [#1622](https://github.com/docker/cagent/pull/1622) - Add debug title command for session title generation
+- [#1623](https://github.com/docker/cagent/pull/1623) - Add skill invocation via slash commands 
+- [#1624](https://github.com/docker/cagent/pull/1624) - Fix schema and add drift test
+- [#1627](https://github.com/docker/cagent/pull/1627) - Enable more linters and fix existing issues
+
+
 ## [v1.20.5] - 2026-02-05
 
 This release improves stability for non-interactive sessions, updates the default Anthropic model to Claude Sonnet 4.5, and adds support for private GitHub repositories and standard agent directories.
@@ -236,3 +290,5 @@ This release improves the terminal user interface with better error handling and
 [v1.20.4]: https://github.com/docker/cagent/releases/tag/v1.20.4
 
 [v1.20.5]: https://github.com/docker/cagent/releases/tag/v1.20.5
+
+[v1.20.6]: https://github.com/docker/cagent/releases/tag/v1.20.6

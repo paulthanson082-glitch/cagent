@@ -34,6 +34,8 @@ experts that collaborate to solve complex problems for you.
   Runner](https://docs.docker.com/ai/model-runner/).
 - **🔀 Runtime model switching** - Change models on-the-fly during a session
   with the `/model` command, with automatic persistence across session reloads.
+- **✏️ Editable messages** - Edit any previous user message to branch the
+  conversation, preserving the original session history.
 
 ## Your First Agent
 

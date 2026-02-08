@@ -328,8 +328,9 @@ func (d *sessionBrowserDialog) renderSession(sess session.Summary, selected bool
 		title = "Untitled"
 	}
 
-	// Account for star indicator width in title length calculation
-	maxTitleLen := maxWidth - 28 // 25 for time + 3 for star indicator
+	// Account for star indicator in title length calculation
+	starWidth := 3                           // star indicator
+	maxTitleLen := maxWidth - 25 - starWidth // 25 for time + star
 	if len(title) > maxTitleLen {
 		title = title[:maxTitleLen-1] + "…"
 	}

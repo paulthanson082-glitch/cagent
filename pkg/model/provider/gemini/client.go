@@ -327,17 +327,35 @@ func (c *Client) buildConfig() *genai.GenerateContentConfig {
 	// hang or fail. IncludeThoughts=false is also set to ensure no thinking content
 	// is returned.
 	if thinking := c.ModelOptions.Thinking(); thinking != nil && !*thinking {
-		// Explicitly disable thinking - required for operations like title generation
-		// where max_tokens is very low and thinking would consume the token budget.
-		// ThinkingBudget=0 disables thinking for both Gemini 2.5 and 3 models.
-		config.ThinkingConfig = &genai.ThinkingConfig{
-			IncludeThoughts: false,
-			ThinkingBudget:  genai.Ptr(int32(0)),
+		model := strings.ToLower(c.ModelConfig.Model)
+		if strings.HasPrefix(model, "gemini-3-") {
+			// Gemini 3 models require thinking — they reject ThinkingBudget=0.
+			// Use the lowest level instead and bump MaxOutputTokens so that
+			// even a tiny caller budget (e.g. 20 for title generation) leaves
+			// room for the model's internal reasoning.
+			config.ThinkingConfig = &genai.ThinkingConfig{
+				IncludeThoughts: false,
+				ThinkingLevel:   genai.ThinkingLevelLow,
+			}
+			const minOutputTokens int32 = 200
+			if config.MaxOutputTokens < minOutputTokens {
+				config.MaxOutputTokens = minOutputTokens
+			}
+			slog.Debug("Gemini 3 thinking reduced to low (cannot be fully disabled)",
+				"model", c.ModelConfig.Model,
+				"max_output_tokens", config.MaxOutputTokens,
+			)
+		} else {
+			// Gemini 2.5 and older: ThinkingBudget=0 disables thinking.
+			config.ThinkingConfig = &genai.ThinkingConfig{
+				IncludeThoughts: false,
+				ThinkingBudget:  genai.Ptr(int32(0)),
+			}
+			slog.Debug("Gemini thinking explicitly disabled via ModelOptions",
+				"model", c.ModelConfig.Model,
+				"max_output_tokens", config.MaxOutputTokens,
+			)
 		}
-		slog.Debug("Gemini thinking explicitly disabled via ModelOptions",
-			"model", c.ModelConfig.Model,
-			"max_output_tokens", config.MaxOutputTokens,
-		)
 	} else if c.ModelConfig.ThinkingBudget != nil {
 		c.applyThinkingConfig(config)
 	} else {

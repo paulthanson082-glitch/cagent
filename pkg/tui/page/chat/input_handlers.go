@@ -40,6 +40,10 @@ func (p *chatPage) handleKeyPress(msg tea.KeyPressMsg) (layout.Model, tea.Cmd, b
 
 	switch {
 	case key.Matches(msg, p.keyMap.Tab):
+		// Block Tab when inline editing - user must escape or submit first
+		if p.messages.IsInlineEditing() {
+			return p, nil, true
+		}
 		if p.focusedPanel == PanelEditor {
 			if cmd := p.editor.AcceptSuggestion(); cmd != nil {
 				return p, cmd, true
@@ -49,8 +53,23 @@ func (p *chatPage) handleKeyPress(msg tea.KeyPressMsg) (layout.Model, tea.Cmd, b
 		return p, nil, true
 
 	case key.Matches(msg, p.keyMap.Cancel):
-		cmd := p.cancelStream(true)
-		return p, cmd, true
+		// If inline editing is active, cancel the edit first
+		if p.messages.IsInlineEditing() {
+			cmd := p.messages.CancelInlineEdit()
+			return p, cmd, true
+		}
+		// Otherwise cancel the stream (only if something is running)
+		if p.working || p.msgCancel != nil {
+			cmd := p.cancelStream(true)
+			return p, cmd, true
+		}
+		// Forward to focused component for other uses (e.g., clear selection)
+		if p.focusedPanel == PanelChat {
+			model, cmd := p.messages.Update(msg)
+			p.messages = model.(messages.Model)
+			return p, cmd, true
+		}
+		return p, nil, true
 
 	case key.Matches(msg, p.keyMap.ExternalEditor):
 		cmd := p.openExternalEditor()

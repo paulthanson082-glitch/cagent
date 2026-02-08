@@ -272,7 +272,7 @@ func (r *Runner) preBuildImages(ctx context.Context, out io.Writer, evals []Inpu
 	}
 
 	if len(errs) > 0 {
-		return fmt.Errorf("failed to build %d image(s): %v", len(errs), errs[0])
+		return fmt.Errorf("failed to build %d image(s): %w", len(errs), errs[0])
 	}
 
 	return nil

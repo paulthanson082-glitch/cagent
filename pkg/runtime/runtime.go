@@ -31,6 +31,7 @@ import (
 	"github.com/docker/cagent/pkg/rag"
 	ragtypes "github.com/docker/cagent/pkg/rag/types"
 	"github.com/docker/cagent/pkg/session"
+	"github.com/docker/cagent/pkg/sessiontitle"
 	"github.com/docker/cagent/pkg/team"
 	"github.com/docker/cagent/pkg/telemetry"
 	"github.com/docker/cagent/pkg/tools"
@@ -135,6 +136,23 @@ type Runtime interface {
 	// PermissionsInfo returns the team-level permission patterns (allow/deny).
 	// Returns nil if no permissions are configured.
 	PermissionsInfo() *PermissionsInfo
+
+	// CurrentAgentSkillsEnabled returns whether skills are enabled for the current agent.
+	CurrentAgentSkillsEnabled() bool
+
+	// CurrentMCPPrompts returns MCP prompts available from the current agent's toolsets.
+	// Returns an empty map if no MCP prompts are available.
+	CurrentMCPPrompts(ctx context.Context) map[string]mcptools.PromptInfo
+
+	// ExecuteMCPPrompt executes a named MCP prompt with the given arguments.
+	ExecuteMCPPrompt(ctx context.Context, promptName string, arguments map[string]string) (string, error)
+
+	// UpdateSessionTitle persists a new title for the current session.
+	UpdateSessionTitle(ctx context.Context, sess *session.Session, title string) error
+
+	// TitleGenerator returns a generator for automatic session titles, or nil
+	// if the runtime does not support local title generation (e.g. remote runtimes).
+	TitleGenerator() *sessiontitle.Generator
 }
 
 // PermissionsInfo contains the allow and deny patterns for tool permissions.
@@ -179,6 +197,10 @@ type LocalRuntime struct {
 	workingDir                  string   // Working directory for hooks execution
 	env                         []string // Environment variables for hooks execution
 	modelSwitcherCfg            *ModelSwitcherConfig
+
+	// fallbackCooldowns tracks per-agent cooldown state for sticky fallback behavior
+	fallbackCooldowns    map[string]*fallbackCooldownState
+	fallbackCooldownsMux sync.RWMutex
 }
 
 type streamResult struct {
@@ -263,6 +285,7 @@ func NewLocalRuntime(agents *team.Team, opts ...Opt) (*LocalRuntime, error) {
 		sessionCompaction:    true,
 		managedOAuth:         true,
 		sessionStore:         session.NewInMemorySessionStore(),
+		fallbackCooldowns:    make(map[string]*fallbackCooldownState),
 	}
 
 	for _, opt := range opts {
@@ -508,6 +531,69 @@ func (r *LocalRuntime) CurrentAgent() *agent.Agent {
 	return current
 }
 
+// CurrentAgentSkillsEnabled returns whether skills are enabled for the current agent.
+func (r *LocalRuntime) CurrentAgentSkillsEnabled() bool {
+	a := r.CurrentAgent()
+	return a != nil && a.SkillsEnabled()
+}
+
+// ExecuteMCPPrompt executes an MCP prompt with provided arguments and returns the content.
+func (r *LocalRuntime) ExecuteMCPPrompt(ctx context.Context, promptName string, arguments map[string]string) (string, error) {
+	currentAgent := r.CurrentAgent()
+	if currentAgent == nil {
+		return "", fmt.Errorf("no current agent available")
+	}
+
+	for _, toolset := range currentAgent.ToolSets() {
+		mcpToolset, ok := tools.As[*mcptools.Toolset](toolset)
+		if !ok {
+			continue
+		}
+
+		result, err := mcpToolset.GetPrompt(ctx, promptName, arguments)
+		if err != nil {
+			// If error is "prompt not found", continue to next toolset
+			if err.Error() == "prompt not found" {
+				continue
+			}
+			return "", fmt.Errorf("error executing prompt '%s': %w", promptName, err)
+		}
+
+		// Convert the MCP result to a string format
+		if len(result.Messages) == 0 {
+			return "No content returned from MCP prompt", nil
+		}
+
+		var content strings.Builder
+		for i, message := range result.Messages {
+			if i > 0 {
+				content.WriteString("\n\n")
+			}
+			if textContent, ok := message.Content.(*mcp.TextContent); ok {
+				content.WriteString(textContent.Text)
+			} else {
+				content.WriteString(fmt.Sprintf("[Non-text content: %T]", message.Content))
+			}
+		}
+		return content.String(), nil
+	}
+
+	return "", fmt.Errorf("MCP prompt '%s' not found in any active toolset", promptName)
+}
+
+// TitleGenerator returns a title generator for automatic session title generation.
+func (r *LocalRuntime) TitleGenerator() *sessiontitle.Generator {
+	a := r.CurrentAgent()
+	if a == nil {
+		return nil
+	}
+	model := a.Model()
+	if model == nil {
+		return nil
+	}
+	return sessiontitle.New(model, a.FallbackModels()...)
+}
+
 // getHooksExecutor creates a hooks executor for the given agent
 func (r *LocalRuntime) getHooksExecutor(a *agent.Agent) *hooks.Executor {
 	hooksCfg := hooks.FromConfig(a.Hooks())
@@ -525,16 +611,55 @@ func getAgentModelID(a *agent.Agent) string {
 	return ""
 }
 
-// agentDetailsFromTeam converts team agent info to AgentDetails for events
+// getEffectiveModelID returns the currently active model ID for an agent, accounting
+// for any active fallback cooldown. During a cooldown period, this returns the fallback
+// model ID instead of the configured primary model, so the UI reflects the actual model in use.
+func (r *LocalRuntime) getEffectiveModelID(a *agent.Agent) string {
+	cooldownState := r.getCooldownState(a.Name())
+	if cooldownState != nil {
+		fallbacks := a.FallbackModels()
+		if cooldownState.fallbackIndex >= 0 && cooldownState.fallbackIndex < len(fallbacks) {
+			return fallbacks[cooldownState.fallbackIndex].ID()
+		}
+	}
+	return getAgentModelID(a)
+}
+
+// agentDetailsFromTeam converts team agent info to AgentDetails for events.
+// It accounts for active fallback cooldowns, returning the effective model
+// instead of the configured model when a fallback is in effect.
 func (r *LocalRuntime) agentDetailsFromTeam() []AgentDetails {
 	agentsInfo := r.team.AgentsInfo()
 	details := make([]AgentDetails, len(agentsInfo))
 	for i, info := range agentsInfo {
+		providerName := info.Provider
+		modelName := info.Model
+
+		// Check if this agent has an active fallback cooldown
+		cooldownState := r.getCooldownState(info.Name)
+		if cooldownState != nil {
+			// Get the agent to access fallback models
+			if a, err := r.team.Agent(info.Name); err == nil && a != nil {
+				fallbacks := a.FallbackModels()
+				if cooldownState.fallbackIndex >= 0 && cooldownState.fallbackIndex < len(fallbacks) {
+					fb := fallbacks[cooldownState.fallbackIndex]
+					// Parse provider/model from the fallback model ID
+					modelID := fb.ID()
+					if p, m, found := strings.Cut(modelID, "/"); found {
+						providerName = p
+						modelName = m
+					} else {
+						modelName = modelID
+					}
+				}
+			}
+		}
+
 		details[i] = AgentDetails{
 			Name:        info.Name,
 			Description: info.Description,
-			Provider:    info.Provider,
-			Model:       info.Model,
+			Provider:    providerName,
+			Model:       modelName,
 			Commands:    info.Commands,
 		}
 	}
@@ -544,6 +669,15 @@ func (r *LocalRuntime) agentDetailsFromTeam() []AgentDetails {
 // SessionStore returns the session store for browsing/loading past sessions.
 func (r *LocalRuntime) SessionStore() session.Store {
 	return r.sessionStore
+}
+
+// UpdateSessionTitle persists the session title via the session store.
+func (r *LocalRuntime) UpdateSessionTitle(ctx context.Context, sess *session.Session, title string) error {
+	sess.Title = title
+	if r.sessionStore != nil {
+		return r.sessionStore.UpdateSession(ctx, sess)
+	}
+	return nil
 }
 
 // PermissionsInfo returns the team-level permission patterns.
@@ -587,7 +721,8 @@ func (r *LocalRuntime) EmitStartupInfo(ctx context.Context, events chan Event) {
 	}
 
 	// Emit agent and team information immediately for fast sidebar display
-	if !send(AgentInfo(a.Name(), getAgentModelID(a), a.Description(), a.WelcomeMessage())) {
+	// Use getEffectiveModelID to account for active fallback cooldowns
+	if !send(AgentInfo(a.Name(), r.getEffectiveModelID(a), a.Description(), a.WelcomeMessage())) {
 		return
 	}
 	if !send(TeamInfo(r.agentDetailsFromTeam(), r.currentAgent)) {
@@ -715,7 +850,8 @@ func (r *LocalRuntime) RunStream(ctx context.Context, sess *session.Session) <-c
 		a := r.CurrentAgent()
 
 		// Emit agent information for sidebar display
-		events <- AgentInfo(a.Name(), getAgentModelID(a), a.Description(), a.WelcomeMessage())
+		// Use getEffectiveModelID to account for active fallback cooldowns
+		events <- AgentInfo(a.Name(), r.getEffectiveModelID(a), a.Description(), a.WelcomeMessage())
 
 		// Emit team information
 		events <- TeamInfo(r.agentDetailsFromTeam(), r.currentAgent)
@@ -736,7 +872,7 @@ func (r *LocalRuntime) RunStream(ctx context.Context, sess *session.Session) <-c
 
 		messages := sess.GetMessages(a)
 		if sess.SendUserMessage {
-			events <- UserMessage(messages[len(messages)-1].Content, sess.ID)
+			events <- UserMessage(messages[len(messages)-1].Content, sess.ID, len(sess.Messages)-1)
 		}
 
 		events <- StreamStarted(sess.ID, a.Name())
@@ -859,21 +995,8 @@ func (r *LocalRuntime) RunStream(ctx context.Context, sess *session.Session) <-c
 			messages := sess.GetMessages(a)
 			slog.Debug("Retrieved messages for processing", "agent", a.Name(), "message_count", len(messages))
 
-			slog.Debug("Creating chat completion stream", "agent", a.Name())
-			stream, err := model.CreateChatCompletionStream(streamCtx, messages, agentTools)
-			if err != nil {
-				streamSpan.RecordError(err)
-				streamSpan.SetStatus(codes.Error, "creating chat completion")
-				slog.Error("Failed to create chat completion stream", "agent", a.Name(), "error", err)
-				// Track error in telemetry
-				telemetry.RecordError(ctx, err.Error())
-				events <- Error(fmt.Sprintf("creating chat completion: %v", err))
-				streamSpan.End()
-				return
-			}
-
-			slog.Debug("Processing stream", "agent", a.Name())
-			res, err := r.handleStream(ctx, stream, a, agentTools, sess, m, events)
+			// Try primary model with fallback chain if configured
+			res, usedModel, err := r.tryModelWithFallback(streamCtx, a, model, messages, agentTools, sess, m, events)
 			if err != nil {
 				// Treat context cancellation as a graceful stop
 				if errors.Is(err, context.Canceled) {
@@ -883,12 +1006,18 @@ func (r *LocalRuntime) RunStream(ctx context.Context, sess *session.Session) <-c
 				}
 				streamSpan.RecordError(err)
 				streamSpan.SetStatus(codes.Error, "error handling stream")
-				slog.Error("Error handling stream", "agent", a.Name(), "error", err)
+				slog.Error("All models failed", "agent", a.Name(), "error", err)
 				// Track error in telemetry
 				telemetry.RecordError(ctx, err.Error())
 				events <- Error(err.Error())
 				streamSpan.End()
 				return
+			}
+
+			// Update model info if we used a fallback
+			if usedModel != nil && usedModel.ID() != model.ID() {
+				slog.Info("Used fallback model", "agent", a.Name(), "primary", model.ID(), "used", usedModel.ID())
+				events <- AgentInfo(a.Name(), usedModel.ID(), a.Description(), a.WelcomeMessage())
 			}
 			streamSpan.SetAttributes(
 				attribute.Int("tool.calls", len(res.Calls)),
@@ -1649,6 +1778,22 @@ func (r *LocalRuntime) handleTaskTransfer(ctx context.Context, sess *session.Ses
 	}
 
 	a := r.CurrentAgent()
+
+	// Validate that the target agent is in the current agent's sub-agents list
+	subAgents := a.SubAgents()
+	if !slices.ContainsFunc(subAgents, func(sa *agent.Agent) bool { return sa.Name() == params.Agent }) {
+		var subAgentNames []string
+		for _, sa := range subAgents {
+			subAgentNames = append(subAgentNames, sa.Name())
+		}
+		var errorMsg string
+		if len(subAgentNames) > 0 {
+			errorMsg = fmt.Sprintf("Agent %s cannot transfer task to %s: target agent not in sub-agents list. Available sub-agent IDs are: %s", a.Name(), params.Agent, strings.Join(subAgentNames, ", "))
+		} else {
+			errorMsg = fmt.Sprintf("Agent %s cannot transfer task to %s: target agent not in sub-agents list. This agent has no sub-agents configured.", a.Name(), params.Agent)
+		}
+		return tools.ResultError(errorMsg), nil
+	}
 
 	// Span for task transfer (optional)
 	ctx, span := r.startSpan(ctx, "runtime.task_transfer", trace.WithAttributes(

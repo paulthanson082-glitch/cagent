@@ -17,8 +17,21 @@ import (
 	"github.com/docker/cagent/pkg/config/latest"
 	"github.com/docker/cagent/pkg/environment"
 	"github.com/docker/cagent/pkg/model/provider/dmr"
+	"github.com/docker/cagent/pkg/modelsdev"
 	"github.com/docker/cagent/pkg/tools"
 )
+
+// TestMain sets up the test environment for all tests in this package.
+func TestMain(m *testing.M) {
+	store, err := modelsdev.NewStore()
+	if err != nil {
+		os.Exit(1)
+	}
+	store.SetDatabaseForTesting(&modelsdev.Database{
+		Providers: make(map[string]modelsdev.Provider),
+	})
+	os.Exit(m.Run())
+}
 
 // skipExamples contains example files that require cloud-specific configurations
 // (e.g., AWS profiles, GCP credentials) that can't be mocked with dummy env vars.
@@ -243,8 +256,8 @@ func TestAutoModelFallbackError(t *testing.T) {
 	_, err = Load(t.Context(), agentSource, runConfig)
 	require.Error(t, err)
 
-	var autoErr *config.ErrAutoModelFallback
-	require.ErrorAs(t, err, &autoErr, "expected ErrAutoModelFallback when auto model selection fails")
+	var autoErr *config.AutoModelFallbackError
+	require.ErrorAs(t, err, &autoErr, "expected AutoModelFallbackError when auto model selection fails")
 }
 
 func TestIsThinkingBudgetDisabled(t *testing.T) {
@@ -273,4 +286,115 @@ func TestIsThinkingBudgetDisabled(t *testing.T) {
 			assert.Equal(t, tt.expected, got)
 		})
 	}
+}
+
+func TestWithPromptFiles(t *testing.T) {
+	t.Setenv("OPENAI_API_KEY", "dummy")
+
+	tests := []struct {
+		name           string
+		cliPromptFiles []string
+		expected       []string
+	}{
+		{
+			name:           "no CLI prompt files",
+			cliPromptFiles: nil,
+			expected:       []string{}, // basic.yaml has no add_prompt_files
+		},
+		{
+			name:           "single CLI prompt file",
+			cliPromptFiles: []string{"AGENTS.md"},
+			expected:       []string{"AGENTS.md"},
+		},
+		{
+			name:           "multiple CLI prompt files",
+			cliPromptFiles: []string{"AGENTS.md", "CLAUDE.md"},
+			expected:       []string{"AGENTS.md", "CLAUDE.md"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			agentSource, err := config.Resolve("testdata/basic.yaml", nil)
+			require.NoError(t, err)
+
+			var opts []Opt
+			if len(tt.cliPromptFiles) > 0 {
+				opts = append(opts, WithPromptFiles(tt.cliPromptFiles))
+			}
+
+			team, err := Load(t.Context(), agentSource, &config.RuntimeConfig{}, opts...)
+			require.NoError(t, err)
+
+			rootAgent, err := team.Agent("root")
+			require.NoError(t, err)
+
+			assert.Equal(t, tt.expected, rootAgent.AddPromptFiles())
+		})
+	}
+}
+
+func TestWithPromptFilesMergesWithConfig(t *testing.T) {
+	t.Setenv("OPENAI_API_KEY", "dummy")
+
+	// Create a temp agent file with add_prompt_files configured
+	tempDir := t.TempDir()
+	agentFile := filepath.Join(tempDir, "agent.yaml")
+	agentYAML := `version: "2"
+agents:
+  root:
+    model: openai/gpt-4o
+    instruction: test
+    add_prompt_files:
+      - config-file.md
+`
+	require.NoError(t, os.WriteFile(agentFile, []byte(agentYAML), 0o644))
+
+	agentSource, err := config.Resolve(agentFile, nil)
+	require.NoError(t, err)
+
+	// Load with CLI prompt files - should merge with config
+	team, err := Load(t.Context(), agentSource, &config.RuntimeConfig{},
+		WithPromptFiles([]string{"cli-file.md"}))
+	require.NoError(t, err)
+
+	rootAgent, err := team.Agent("root")
+	require.NoError(t, err)
+
+	// Config files come first, then CLI files
+	expected := []string{"config-file.md", "cli-file.md"}
+	assert.Equal(t, expected, rootAgent.AddPromptFiles())
+}
+
+func TestWithPromptFilesDeduplicates(t *testing.T) {
+	t.Setenv("OPENAI_API_KEY", "dummy")
+
+	// Create a temp agent file with add_prompt_files configured
+	tempDir := t.TempDir()
+	agentFile := filepath.Join(tempDir, "agent.yaml")
+	agentYAML := `version: "2"
+agents:
+  root:
+    model: openai/gpt-4o
+    instruction: test
+    add_prompt_files:
+      - AGENTS.md
+      - CLAUDE.md
+`
+	require.NoError(t, os.WriteFile(agentFile, []byte(agentYAML), 0o644))
+
+	agentSource, err := config.Resolve(agentFile, nil)
+	require.NoError(t, err)
+
+	// CLI specifies a file that's already in config - should deduplicate
+	team, err := Load(t.Context(), agentSource, &config.RuntimeConfig{},
+		WithPromptFiles([]string{"AGENTS.md", "extra.md"}))
+	require.NoError(t, err)
+
+	rootAgent, err := team.Agent("root")
+	require.NoError(t, err)
+
+	// AGENTS.md should only appear once (from config), extra.md added at end
+	expected := []string{"AGENTS.md", "CLAUDE.md", "extra.md"}
+	assert.Equal(t, expected, rootAgent.AddPromptFiles())
 }

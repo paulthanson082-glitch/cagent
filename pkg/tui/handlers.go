@@ -97,6 +97,47 @@ func (a *appModel) handleLoadSession(sessionID string) (tea.Model, tea.Cmd) {
 	)
 }
 
+func (a *appModel) handleBranchFromEdit(msg messages.BranchFromEditMsg) (tea.Model, tea.Cmd) {
+	store := a.application.SessionStore()
+	if store == nil {
+		return a, notification.ErrorCmd("No session store configured")
+	}
+	if msg.ParentSessionID == "" {
+		return a, notification.ErrorCmd("No parent session for branch")
+	}
+
+	newSess, err := store.BranchSession(context.Background(), msg.ParentSessionID, msg.BranchAtPosition)
+	if err != nil {
+		return a, notification.ErrorCmd(fmt.Sprintf("Failed to branch session: %v", err))
+	}
+
+	if current := a.application.Session(); current != nil {
+		newSess.HideToolResults = current.HideToolResults
+		newSess.ToolsApproved = current.ToolsApproved
+	}
+
+	// Preserve sidebar settings across branch
+	sidebarSettings := a.chatPage.GetSidebarSettings()
+
+	a.application.ReplaceSession(context.Background(), newSess)
+	a.sessionState = service.NewSessionState(newSess)
+	a.chatPage = chat.New(a.application, a.sessionState)
+	a.dialog = dialog.New()
+	a.applyKeyboardEnhancements()
+
+	// Restore sidebar settings
+	a.chatPage.SetSidebarSettings(sidebarSettings)
+
+	return a, tea.Sequence(
+		a.Init(),
+		a.handleWindowResize(a.wWidth, a.wHeight),
+		core.CmdHandler(messages.SendMsg{
+			Content:     msg.Content,
+			Attachments: msg.Attachments,
+		}),
+	)
+}
+
 func (a *appModel) handleToggleSessionStar(sessionID string) (tea.Model, tea.Cmd) {
 	store := a.application.SessionStore()
 	if store == nil {
