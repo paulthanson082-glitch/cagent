@@ -1,0 +1,9 @@
+agents:
+  scaffolded_default:
+    model: openai/gpt-5-mini
+    description: "Scaffolded default agent"
+    instruction: |
+      You are a helpful assistant. Respond concisely and ask clarifying questions when necessary.
+    toolsets:
+      - type: think
+      - type: todo
