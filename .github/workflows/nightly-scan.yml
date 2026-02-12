@@ -23,6 +23,11 @@ jobs:
   scan:
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    # Skip if no API keys are configured
+    if: |
+      secrets.ANTHROPIC_API_KEY != '' ||
+      secrets.OPENAI_API_KEY != '' ||
+      secrets.GEMINI_API_KEY != ''
     env:
       HAS_APP_SECRETS: ${{ secrets.CAGENT_REVIEWER_APP_ID != '' }}
 
