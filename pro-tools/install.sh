@@ -36,9 +36,14 @@ export CODE_CMD
 # Preflight checks
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 check_editor_version() {
-  local version
+  local version editor_name
   version=$($CODE_CMD --version 2>/dev/null | head -1) || version="unknown"
-  info "Using $($CODE_CMD --version 2>/dev/null | grep -oE 'Code|Cursor') $version"
+  editor_name="$(basename "$CODE_CMD")"
+  case "$editor_name" in
+    code) editor_name="Code" ;;
+    cursor) editor_name="Cursor" ;;
+  esac
+  info "Using $editor_name $version"
 }
 validate_bundles() {
   local missing=()
