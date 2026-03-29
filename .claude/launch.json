@@ -1,0 +1,29 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "Jaeger (Tracing UI)",
+      "runtimeExecutable": "docker",
+      "runtimeArgs": ["compose", "up", "jaeger"],
+      "port": 16686
+    },
+    {
+      "name": "DHI MCP Server",
+      "runtimeExecutable": "python",
+      "runtimeArgs": ["examples/dhi/dhi_mcp_server/server.py"],
+      "port": 4318
+    },
+    {
+      "name": "Elicitation Demo (MCP)",
+      "runtimeExecutable": "python",
+      "runtimeArgs": ["examples/elicitation/server.py"],
+      "port": 8000
+    },
+    {
+      "name": "Node Test App",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["examples/dhi/node-test/index.js"],
+      "port": 3000
+    }
+  ]
+}
