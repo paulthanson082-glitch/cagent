@@ -1,0 +1,29 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "cagent API server",
+      "runtimeExecutable": "./bin/cagent",
+      "runtimeArgs": ["api", "--listen", ":8080", "./examples/pirate.yaml"],
+      "port": 8080
+    },
+    {
+      "name": "cagent A2A server",
+      "runtimeExecutable": "./bin/cagent",
+      "runtimeArgs": ["a2a", "--port", "9000", "./examples/pirate.yaml"],
+      "port": 9000
+    },
+    {
+      "name": "cagent MCP HTTP server",
+      "runtimeExecutable": "./bin/cagent",
+      "runtimeArgs": ["mcp", "--http", "--port", "8081", "./examples/pirate.yaml"],
+      "port": 8081
+    },
+    {
+      "name": "Jaeger (OpenTelemetry tracing UI)",
+      "runtimeExecutable": "docker",
+      "runtimeArgs": ["compose", "up", "jaeger"],
+      "port": 16686
+    }
+  ]
+}
