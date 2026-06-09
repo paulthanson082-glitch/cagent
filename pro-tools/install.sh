@@ -99,7 +99,7 @@ run_all() {
   header "Running All Bundles"
 
   for bundle in "${BUNDLES_ARRAY[@]}"; do
-    run "$(echo "$bundle" | sed 's/^./\U&/')" "install-${bundle}.sh" || ((failed++))
+    run "$(echo "$bundle" | awk '{print toupper(substr($0,1,1)) substr($0,2)}')" "install-${bundle}.sh" || failed=$(( failed + 1 ))
   done
 
   echo ""
@@ -148,7 +148,7 @@ menu() {
 
   local choice
   read -r -p "Choice (1-6, q to quit): " choice
-  choice="${choice,,}"  # convert to lowercase
+  choice="$(echo "$choice" | tr '[:upper:]' '[:lower:]')"  # convert to lowercase
 
   case "$choice" in
     1) run "Essential" "install-essential.sh" ;;
@@ -188,7 +188,7 @@ parse_args() {
     [[ "$DRY_RUN" == "true" ]] && header "DRY RUN MODE"
 
     for bundle in "${bundles_to_run[@]}"; do
-      run "$(echo "$bundle" | sed 's/^./\U&/')" "install-${bundle}.sh" || true
+      run "$(echo "$bundle" | awk '{print toupper(substr($0,1,1)) substr($0,2)}')" "install-${bundle}.sh" || true
     done
 
     echo ""
